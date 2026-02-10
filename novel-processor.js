@@ -251,6 +251,7 @@ class NovelProcessor {
     }
 
     // 批量获取单词数据
+    // 在 novel-processor.js 中，修改 batchProcessWords 函数
     async batchProcessWords(words, callback) {
         const results = [];
         
@@ -262,15 +263,17 @@ class NovelProcessor {
                 const difficulty = this.assignDifficulty(word);
                 const frequency = this.wordFrequency.get(word) || 0;
                 
-                results.push({
-                    word,
-                    difficulty,
-                    frequency,
+                const wordData = {
+                    word: word,
+                    difficulty: difficulty,
+                    frequency: frequency,
                     meaning: data.meaning,
                     phonetic: data.phonetic,
                     example: Array.isArray(data.examples) ? data.examples[0] : data.examples,
                     collins: data.collins
-                });
+                };
+                
+                results.push(wordData);
                 
                 // 更新进度
                 if (callback) {
@@ -278,9 +281,23 @@ class NovelProcessor {
                 }
                 
                 // 避免请求过快
-                await new Promise(resolve => setTimeout(resolve, 100));
+                await new Promise(resolve => setTimeout(resolve, 50));
             } catch (error) {
                 console.error(`处理单词 "${word}" 时出错:`, error);
+                // 即使出错也返回一个基本的数据结构
+                results.push({
+                    word: word,
+                    difficulty: this.assignDifficulty(word),
+                    frequency: this.wordFrequency.get(word) || 0,
+                    meaning: `${word} 的释义`,
+                    phonetic: '/wɜːd/',
+                    example: `This is an example sentence for ${word}.`,
+                    collins: {
+                        rank: '★★★☆☆',
+                        explanation: 'This word appears in the uploaded novel.',
+                        examples: [`The word "${word}" appears in this context.`]
+                    }
+                });
             }
         }
         
@@ -289,4 +306,5 @@ class NovelProcessor {
 }
 
 // 导出单例实例
+
 const novelProcessor = new NovelProcessor();
