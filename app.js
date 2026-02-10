@@ -97,6 +97,10 @@ class WordLearnerApp {
         });
 
         document.getElementById('processBtn').addEventListener('click', () => this.processNovelFile());
+        // 在 bindEvents 函数中添加以下代码（在适当位置）
+
+        // 保存单词库按钮
+        document.getElementById('saveWordsBtn').addEventListener('click', () => this.saveWordsFromNovel());
 
         // 单词库页面
         document.getElementById('difficultyFilter').addEventListener('change', () => this.loadWordsList());
@@ -624,6 +628,7 @@ class WordLearnerApp {
             this.showLoader('正在保存单词到数据库...');
             
             let savedCount = 0;
+            let skippedCount = 0;
             const totalWords = this.currentNovelWords.length;
             
             // 批量处理单词
@@ -635,52 +640,95 @@ class WordLearnerApp {
             );
             
             // 保存到数据库
-            for (const wordData of processedWords) {
+            for (let i = 0; i < processedWords.length; i++) {
+                const wordData = processedWords[i];
+                
                 try {
-                    await this.db.addWord({
-                        ...wordData,
-                        source: 'novel'
-                    });
-                    savedCount++;
+                    // 检查单词是否已存在
+                    const existingWord = await this.db.getWord(wordData.word);
+                    
+                    if (existingWord) {
+                        // 单词已存在，跳过
+                        skippedCount++;
+                        console.log(`单词 "${wordData.word}" 已存在，跳过`);
+                    } else {
+                        // 保存新单词
+                        await this.db.addWord({
+                            word: wordData.word,
+                            difficulty: wordData.difficulty,
+                            frequency: wordData.frequency,
+                            meaning: wordData.meaning,
+                            phonetic: wordData.phonetic,
+                            example: wordData.example,
+                            collins: wordData.collins,
+                            source: 'novel',
+                            createdAt: new Date().toISOString(),
+                            lastReviewed: null,
+                            reviewCount: 0
+                        });
+                        savedCount++;
+                        console.log(`保存单词: ${wordData.word}`);
+                    }
+                    
+                    // 更新进度
+                    if (i % 10 === 0 || i === processedWords.length - 1) {
+                        this.showLoader(`正在保存单词: ${wordData.word} (${i + 1}/${totalWords})`);
+                    }
+                    
                 } catch (error) {
-                    // 可能单词已存在，继续处理下一个
-                    console.log(`单词 "${wordData.word}" 可能已存在:`, error);
+                    console.error(`保存单词 "${wordData.word}" 时出错:`, error);
+                    skippedCount++;
                 }
             }
             
             this.hideLoader();
-            this.showNotification(`成功保存 ${savedCount} 个单词到单词库`, 'success');
+            this.showNotification(`成功保存 ${savedCount} 个单词到单词库（${skippedCount} 个已存在）`, 'success');
             
             // 清空当前处理结果
             this.currentNovelWords = null;
             this.currentNovelResult = null;
             
             // 重置上传界面
-            const uploadArea = document.getElementById('uploadArea');
-            uploadArea.innerHTML = `
-                <i class="fas fa-cloud-upload-alt upload-icon"></i>
-                <p>点击或拖拽文件到此区域</p>
-                <button class="upload-btn" id="selectFileBtn">选择文件</button>
-            `;
-            
-            // 重新绑定事件
-            setTimeout(() => {
-                document.getElementById('selectFileBtn').addEventListener('click', () => {
-                    document.getElementById('novelFile').click();
-                });
-            }, 100);
-            
-            document.getElementById('processingResult').style.display = 'none';
-            document.getElementById('processBtn').disabled = true;
+            this.resetUploadInterface();
             
             // 更新首页统计
             await this.updateTodayProgress();
             
+            // 如果当前在单词库页面，刷新列表
+            if (this.currentPage === 'words') {
+                await this.loadWordsList();
+            }
+            
         } catch (error) {
             console.error('保存单词失败:', error);
             this.hideLoader();
-            this.showNotification('保存单词失败', 'error');
+            this.showNotification('保存单词失败: ' + error.message, 'error');
         }
+    }
+    
+    // 添加重置上传界面的方法
+    resetUploadInterface() {
+        const uploadArea = document.getElementById('uploadArea');
+        uploadArea.innerHTML = `
+            <i class="fas fa-cloud-upload-alt upload-icon"></i>
+            <p>点击或拖拽文件到此区域</p>
+            <input type="file" id="novelFile" accept=".txt" style="display: none;">
+            <button class="upload-btn" id="selectFileBtn">选择文件</button>
+        `;
+        
+        // 重新绑定事件
+        setTimeout(() => {
+            document.getElementById('selectFileBtn').addEventListener('click', () => {
+                document.getElementById('novelFile').click();
+            });
+            
+            const fileInput = document.getElementById('novelFile');
+            fileInput.value = ''; // 清空文件输入
+        }, 100);
+        
+        document.getElementById('processingResult').style.display = 'none';
+        document.getElementById('processBtn').disabled = true;
+        this.novelFileContent = null;
     }
 
     async loadWordsList() {
@@ -1075,4 +1123,5 @@ window.addEventListener('DOMContentLoaded', async () => {
     
     // 暴露到全局
     window.app = app;
+
 });
