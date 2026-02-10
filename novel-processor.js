@@ -1,3 +1,4 @@
+// 小说处理模块 - 集成网络词典API
 // 常见简单单词列表（过滤用）
 const COMMON_WORDS = new Set([
     // 基础词汇
@@ -35,12 +36,15 @@ class NovelProcessor {
     constructor() {
         this.wordFrequency = new Map();
         this.difficultyLevels = {
-            1: { name: '初级', freqRange: [1000, Infinity] }, // 最常见
+            1: { name: '初级', freqRange: [1000, Infinity] },
             2: { name: '中级', freqRange: [500, 999] },
             3: { name: '高级', freqRange: [200, 499] },
             4: { name: '专业', freqRange: [50, 199] },
             5: { name: '学术', freqRange: [0, 49] }
         };
+        
+        // 缓存已经查询过的单词，避免重复请求
+        this.dictionaryCache = new Map();
     }
 
     // 处理小说文本
@@ -167,91 +171,132 @@ class NovelProcessor {
         return distribution;
     }
 
-    // 获取词典数据（模拟）
+    // 获取词典数据 - 使用网络API
     async getDictionaryData(word) {
-        // 注意：实际应用中需要连接到真正的词典API
-        // 这里使用模拟数据作为示例
+        // 检查缓存
+        if (this.dictionaryCache.has(word)) {
+            return this.dictionaryCache.get(word);
+        }
         
-        const mockData = {
-            meaning: this.getMockMeaning(word),
-            phonetic: this.getMockPhonetic(word),
-            examples: this.getMockExamples(word),
-            collins: this.getMockCollins(word)
-        };
-        
-        return mockData;
-    }
-
-    getMockMeaning(word) {
-        const meanings = {
-            'profound': 'adj. 深刻的；意义深远的；渊博的',
-            'eloquent': 'adj. 雄辩的；有说服力的；动人的',
-            'resilient': 'adj. 有弹性的；适应力强的；能复原的',
-            'ephemeral': 'adj. 短暂的；瞬息的',
-            'ubiquitous': 'adj. 无所不在的；普遍存在的'
-        };
-        
-        return meanings[word] || `${word} 的释义未找到`;
-    }
-
-    getMockPhonetic(word) {
-        const phonetics = {
-            'profound': '/prəˈfaʊnd/',
-            'eloquent': '/ˈeləkwənt/',
-            'resilient': '/rɪˈzɪliənt/',
-            'ephemeral': '/ɪˈfemərəl/',
-            'ubiquitous': '/juːˈbɪkwɪtəs/'
-        };
-        
-        return phonetics[word] || '/ˈwɜːd/';
-    }
-
-    getMockExamples(word) {
-        const examples = {
-            'profound': 'His words had a profound impact on my life.',
-            'eloquent': 'She delivered an eloquent speech that moved everyone.',
-            'resilient': 'Children are often more resilient than adults.',
-            'ephemeral': 'The beauty of cherry blossoms is ephemeral.',
-            'ubiquitous': 'Smartphones have become ubiquitous in modern society.'
-        };
-        
-        return examples[word] || `This is an example sentence for ${word}.`;
-    }
-
-    getMockCollins(word) {
-        const collinsData = {
-            'profound': {
-                rank: '★★★★★',
-                explanation: 'You use profound to emphasize that something is very great or intense.',
-                examples: [
-                    'The illness had a profound effect on his outlook.',
-                    'Anna\'s patriotism was profound.'
-                ]
-            },
-            'eloquent': {
-                rank: '★★★★☆',
-                explanation: 'Speech or writing that is eloquent is well expressed and effective in persuading people.',
-                examples: [
-                    'I heard him make a very eloquent speech at that dinner.',
-                    'She was an eloquent speaker.'
-                ]
+        try {
+            // 使用 Free Dictionary API
+            const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+            
+            if (!response.ok) {
+                throw new Error(`API响应错误: ${response.status}`);
             }
-        };
-        
-        const defaultCollins = {
-            rank: '★★★☆☆',
-            explanation: 'This word is commonly used in English language.',
-            examples: [
-                `The word "${word}" appears in many contexts.`,
-                `Learning "${word}" will improve your vocabulary.`
-            ]
-        };
-        
-        return collinsData[word] || defaultCollins;
+            
+            const data = await response.json();
+            
+            // 解析API响应
+            const parsedData = this.parseDictionaryResponse(data, word);
+            
+            // 缓存结果
+            this.dictionaryCache.set(word, parsedData);
+            
+            return parsedData;
+            
+        } catch (error) {
+            console.warn(`获取单词"${word}"的词典数据失败:`, error);
+            
+            // 返回降级数据
+            const fallbackData = this.getFallbackData(word);
+            this.dictionaryCache.set(word, fallbackData);
+            return fallbackData;
+        }
     }
 
-    // 批量获取单词数据
-    // 在 novel-processor.js 中，修改 batchProcessWords 函数
+    // 解析API响应
+    parseDictionaryResponse(apiData, originalWord) {
+        if (!apiData || !apiData.length) {
+            return this.getFallbackData(originalWord);
+        }
+        
+        const entry = apiData[0];
+        
+        // 获取音标
+        let phonetic = '';
+        if (entry.phonetic) {
+            phonetic = entry.phonetic;
+        } else if (entry.phonetics && entry.phonetics.length > 0) {
+            // 尝试获取第一个有文本的音标
+            const firstPhonetic = entry.phonetics.find(p => p.text);
+            if (firstPhonetic) {
+                phonetic = firstPhonetic.text;
+            }
+        }
+        
+        // 获取释义和例句
+        let meaning = '';
+        let example = '';
+        
+        if (entry.meanings && entry.meanings.length > 0) {
+            // 取第一个词性的第一个释义
+            const firstMeaning = entry.meanings[0];
+            const partOfSpeech = firstMeaning.partOfSpeech || '';
+            
+            if (firstMeaning.definitions && firstMeaning.definitions.length > 0) {
+                const firstDefinition = firstMeaning.definitions[0];
+                meaning = `${partOfSpeech ? partOfSpeech + '. ' : ''}${firstDefinition.definition || '暂无释义'}`;
+                
+                // 取第一个例句
+                if (firstDefinition.example) {
+                    example = firstDefinition.example;
+                }
+            }
+        }
+        
+        // 获取更多例句（从所有释义中收集）
+        const examples = [];
+        if (entry.meanings) {
+            entry.meanings.forEach(meaningObj => {
+                if (meaningObj.definitions) {
+                    meaningObj.definitions.forEach(def => {
+                        if (def.example && examples.length < 3) {
+                            examples.push(def.example);
+                        }
+                    });
+                }
+            });
+        }
+        
+        return {
+            meaning: meaning || `${originalWord} 的释义`,
+            phonetic: phonetic || `/${this.generatePhoneticFallback(originalWord)}/`,
+            examples: examples.length > 0 ? examples : [`This is an example sentence for ${originalWord}.`],
+            collins: null, // 不再使用柯林斯词典
+            rawApiData: entry // 保存原始API数据供后续使用
+        };
+    }
+
+    // 生成降级音标（简单规则）
+    generatePhoneticFallback(word) {
+        // 简单的音标降级规则
+        const vowels = 'aeiou';
+        let phonetic = '';
+        
+        for (let char of word.toLowerCase()) {
+            if (vowels.includes(char)) {
+                phonetic += 'ə';
+            } else {
+                phonetic += char;
+            }
+        }
+        
+        return phonetic;
+    }
+
+    // 获取降级数据（当API失败时使用）
+    getFallbackData(word) {
+        return {
+            meaning: `${word} 的释义（网络数据获取失败，请检查网络）`,
+            phonetic: `/${this.generatePhoneticFallback(word)}/`,
+            examples: [`This is an example sentence for ${word}.`],
+            collins: null
+        };
+    }
+
+    // 批量获取单词数据（修改为使用网络API）
     async batchProcessWords(words, callback) {
         const results = [];
         
@@ -259,44 +304,43 @@ class NovelProcessor {
             const word = words[i];
             
             try {
+                // 从网络API获取数据
                 const data = await this.getDictionaryData(word);
                 const difficulty = this.assignDifficulty(word);
                 const frequency = this.wordFrequency.get(word) || 0;
                 
-                const wordData = {
-                    word: word,
-                    difficulty: difficulty,
-                    frequency: frequency,
+                results.push({
+                    word,
+                    difficulty,
+                    frequency,
                     meaning: data.meaning,
                     phonetic: data.phonetic,
                     example: Array.isArray(data.examples) ? data.examples[0] : data.examples,
-                    collins: data.collins
-                };
-                
-                results.push(wordData);
+                    collins: data.collins,
+                    rawData: data.rawApiData // 保存原始数据
+                });
                 
                 // 更新进度
                 if (callback) {
                     callback(i + 1, words.length, word);
                 }
                 
-                // 避免请求过快
-                await new Promise(resolve => setTimeout(resolve, 50));
+                // 添加延迟，避免请求过快
+                await new Promise(resolve => setTimeout(resolve, 200));
+                
             } catch (error) {
                 console.error(`处理单词 "${word}" 时出错:`, error);
+                
                 // 即使出错也返回一个基本的数据结构
+                const fallbackData = this.getFallbackData(word);
                 results.push({
-                    word: word,
+                    word,
                     difficulty: this.assignDifficulty(word),
                     frequency: this.wordFrequency.get(word) || 0,
-                    meaning: `${word} 的释义`,
-                    phonetic: '/wɜːd/',
-                    example: `This is an example sentence for ${word}.`,
-                    collins: {
-                        rank: '★★★☆☆',
-                        explanation: 'This word appears in the uploaded novel.',
-                        examples: [`The word "${word}" appears in this context.`]
-                    }
+                    meaning: fallbackData.meaning,
+                    phonetic: fallbackData.phonetic,
+                    example: fallbackData.examples[0],
+                    collins: null
                 });
             }
         }
@@ -306,5 +350,4 @@ class NovelProcessor {
 }
 
 // 导出单例实例
-
 const novelProcessor = new NovelProcessor();
