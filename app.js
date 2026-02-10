@@ -6,6 +6,130 @@ class WordLearnerApp {
         this.learningWords = [];
         this.currentWordIndex = 0;
         this.showingDetails = false;
+        this.networkAvailable = true;
+        this.currentAudioUrl = null;
+        
+        // 添加词典API管理器
+        this.dictionaryAPI = {
+            baseUrl: 'https://api.dictionaryapi.dev/api/v2/entries/en',
+            
+            // 获取单词数据的统一方法
+            async fetchWordData(word) {
+                try {
+                    console.log(`正在获取单词"${word}"的数据...`);
+                    const response = await fetch(`${this.baseUrl}/${encodeURIComponent(word)}`);
+                    
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+                    }
+                    
+                    const data = await response.json();
+                    console.log(`单词"${word}"数据获取成功`);
+                    return this.parseApiData(data, word);
+                    
+                } catch (error) {
+                    console.error(`获取单词"${word}"数据失败:`, error);
+                    return this.getFallbackData(word);
+                }
+            },
+            
+            // 解析API响应
+            parseApiData(apiData, originalWord) {
+                if (!apiData || !apiData.length) {
+                    return this.getFallbackData(originalWord);
+                }
+                
+                const entry = apiData[0];
+                
+                // 提取音标
+                let phonetic = '';
+                if (entry.phonetic) {
+                    phonetic = entry.phonetic;
+                } else if (entry.phonetics && entry.phonetics.length > 0) {
+                    const firstPhonetic = entry.phonetics.find(p => p.text);
+                    if (firstPhonetic) {
+                        phonetic = firstPhonetic.text;
+                    }
+                }
+                
+                // 提取释义和例句
+                let meaning = '';
+                let example = '';
+                let allMeanings = [];
+                
+                if (entry.meanings && entry.meanings.length > 0) {
+                    // 收集所有释义
+                    entry.meanings.forEach(meaningObj => {
+                        const partOfSpeech = meaningObj.partOfSpeech || '';
+                        
+                        if (meaningObj.definitions) {
+                            meaningObj.definitions.forEach((def, idx) => {
+                                if (idx === 0 && !meaning) {
+                                    meaning = `${partOfSpeech ? partOfSpeech + '. ' : ''}${def.definition || '暂无释义'}`;
+                                    example = def.example || '';
+                                }
+                                
+                                allMeanings.push({
+                                    partOfSpeech,
+                                    definition: def.definition,
+                                    example: def.example
+                                });
+                            });
+                        }
+                    });
+                }
+                
+                // 获取发音URL
+                let audioUrl = '';
+                if (entry.phonetics && entry.phonetics.length > 0) {
+                    const audioPhonetic = entry.phonetics.find(p => p.audio && p.audio.length > 0);
+                    if (audioPhonetic) {
+                        audioUrl = audioPhonetic.audio;
+                    }
+                }
+                
+                return {
+                    word: originalWord,
+                    phonetic: phonetic || `/${this.generatePhoneticFallback(originalWord)}/`,
+                    meaning: meaning || `${originalWord} 的释义`,
+                    example: example || '',
+                    allMeanings: allMeanings,
+                    audioUrl: audioUrl,
+                    rawData: entry
+                };
+            },
+            
+            // 生成降级音标
+            generatePhoneticFallback(word) {
+                const simpleRules = {
+                    'a': 'æ', 'e': 'ɛ', 'i': 'ɪ', 'o': 'ɒ', 'u': 'ʌ',
+                    'ay': 'aɪ', 'ee': 'iː', 'oo': 'uː', 'th': 'θ'
+                };
+                
+                let phonetic = word.toLowerCase();
+                
+                // 应用简单规则
+                for (const [pattern, replacement] of Object.entries(simpleRules)) {
+                    phonetic = phonetic.replace(new RegExp(pattern, 'g'), replacement);
+                }
+                
+                return phonetic;
+            },
+            
+            // 获取降级数据
+            getFallbackData(word) {
+                return {
+                    word: word,
+                    phonetic: `/${this.generatePhoneticFallback(word)}/`,
+                    meaning: `${word} 的释义（网络查询失败）`,
+                    example: `This is an example for ${word}.`,
+                    allMeanings: [],
+                    audioUrl: '',
+                    rawData: null
+                };
+            }
+        };
         
         this.init();
     }
@@ -25,6 +149,23 @@ class WordLearnerApp {
         
         // 初始化语音合成
         this.initSpeech();
+        
+        // 测试网络连接
+        await this.testNetworkConnection();
+    }
+
+    async testNetworkConnection() {
+        try {
+            console.log('正在测试网络连接...');
+            const response = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/test', {
+                method: 'HEAD'
+            });
+            this.networkAvailable = response.ok;
+            console.log(`网络连接测试: ${this.networkAvailable ? '成功' : '失败'}`);
+        } catch (error) {
+            console.warn('网络连接测试失败，将使用本地数据');
+            this.networkAvailable = false;
+        }
     }
 
     bindEvents() {
@@ -97,9 +238,6 @@ class WordLearnerApp {
         });
 
         document.getElementById('processBtn').addEventListener('click', () => this.processNovelFile());
-        // 在 bindEvents 函数中添加以下代码（在适当位置）
-
-        // 保存单词库按钮
         document.getElementById('saveWordsBtn').addEventListener('click', () => this.saveWordsFromNovel());
 
         // 单词库页面
@@ -182,7 +320,7 @@ class WordLearnerApp {
             document.getElementById('totalGoal').textContent = dailyGoal;
             document.getElementById('todayProgress').textContent = `${todayLearned}/${dailyGoal}`;
             
-            // 更新坚持天数（简化实现）
+            // 更新坚持天数
             const streak = localStorage.getItem('learningStreak') || '0';
             document.getElementById('streakDays').textContent = streak;
             
@@ -316,25 +454,59 @@ class WordLearnerApp {
         
         const wordData = this.learningWords[this.currentWordIndex];
         
-        // 更新单词显示
-        document.getElementById('currentWord').textContent = wordData.word;
-        document.getElementById('wordPhonetic').textContent = wordData.phonetic || '/ˈwɜːd/';
-        document.getElementById('wordMeaning').textContent = wordData.meaning || '暂无释义';
-        document.getElementById('wordExample').textContent = wordData.example || '暂无例句';
+        // 显示加载状态
+        this.showLoader('加载单词数据中...');
+        
+        try {
+            // 尝试从网络获取最新数据
+            let freshData;
+            
+            if (this.networkAvailable) {
+                freshData = await this.dictionaryAPI.fetchWordData(wordData.word);
+            } else {
+                // 使用本地数据
+                freshData = {
+                    word: wordData.word,
+                    phonetic: wordData.phonetic || '/ˈwɜːd/',
+                    meaning: wordData.meaning || '暂无释义',
+                    example: wordData.example || '暂无例句',
+                    allMeanings: [],
+                    audioUrl: ''
+                };
+            }
+            
+            // 更新单词显示
+            document.getElementById('currentWord').textContent = freshData.word;
+            document.getElementById('wordPhonetic').textContent = freshData.phonetic;
+            document.getElementById('wordMeaning').textContent = freshData.meaning;
+            document.getElementById('wordExample').textContent = freshData.example;
+            
+            // 更新词典详情部分
+            this.updateDictionaryDetails(freshData);
+            
+            // 保存音频URL供发音使用
+            this.currentAudioUrl = freshData.audioUrl;
+            
+        } catch (error) {
+            console.error('加载单词数据失败:', error);
+            
+            // 使用本地数据作为降级
+            document.getElementById('currentWord').textContent = wordData.word;
+            document.getElementById('wordPhonetic').textContent = wordData.phonetic || '/ˈwɜːd/';
+            document.getElementById('wordMeaning').textContent = wordData.meaning || '暂无释义';
+            document.getElementById('wordExample').textContent = wordData.example || '暂无例句';
+        }
         
         // 更新难度徽章
         const difficultyBadge = document.getElementById('difficultyBadge');
         difficultyBadge.textContent = this.getDifficultyText(wordData.difficulty);
         difficultyBadge.dataset.level = wordData.difficulty;
         
-        // 更新柯林斯词典内容
-        this.updateCollinsContent(wordData);
-        
         // 更新进度
         document.getElementById('learnedCount').textContent = this.currentWordIndex + 1;
         
         // 检查是否在生词本中
-        this.updateNewWordButton(wordData.id);
+        await this.updateNewWordButton(wordData.id);
         
         // 显示/隐藏详细信息
         const detailsSection = document.getElementById('wordDetails');
@@ -343,25 +515,32 @@ class WordLearnerApp {
         } else {
             detailsSection.style.display = 'none';
         }
+        
+        this.hideLoader();
     }
 
-    updateCollinsContent(wordData) {
-        const collinsContent = document.getElementById('collinsContent');
+    updateDictionaryDetails(wordData) {
+        const collinsSection = document.getElementById('collinsContent');
         
-        if (wordData.collins) {
-            const collins = wordData.collins;
-            collinsContent.innerHTML = `
-                <div class="collins-rank">${collins.rank}</div>
-                <p>${collins.explanation}</p>
-                <div class="collins-examples">
-                    <strong>例句：</strong>
-                    <ul>
-                        ${collins.examples.map(example => `<li>${example}</li>`).join('')}
-                    </ul>
-                </div>
-            `;
+        if (wordData.allMeanings && wordData.allMeanings.length > 0) {
+            let html = '<div class="dictionary-details">';
+            
+            wordData.allMeanings.forEach((meaning, index) => {
+                if (index < 3) { // 只显示前3个释义
+                    html += `
+                        <div class="meaning-item">
+                            <div class="part-of-speech">${meaning.partOfSpeech || '未知词性'}</div>
+                            <div class="definition">${meaning.definition || '无定义'}</div>
+                            ${meaning.example ? `<div class="example"><em>例句:</em> ${meaning.example}</div>` : ''}
+                        </div>
+                    `;
+                }
+            });
+            
+            html += '</div>';
+            collinsSection.innerHTML = html;
         } else {
-            collinsContent.innerHTML = '<p>柯林斯词典数据未找到</p>';
+            collinsSection.innerHTML = '<p>词典数据加载中...</p>';
         }
     }
 
@@ -375,7 +554,7 @@ class WordLearnerApp {
             // 记录学习历史
             await this.db.addLearningHistory(wordData.id, correct);
             
-            // 播放音效（可选）
+            // 播放音效
             this.playAnswerSound(correct);
             
             // 显示反馈
@@ -432,18 +611,33 @@ class WordLearnerApp {
     speakCurrentWord() {
         const word = document.getElementById('currentWord').textContent;
         
+        // 如果有网络音频URL，优先使用
+        if (this.currentAudioUrl) {
+            try {
+                const audio = new Audio(this.currentAudioUrl);
+                audio.play().catch(e => {
+                    console.warn('网络音频播放失败，使用合成语音:', e);
+                    this.speakWithSynthesis(word);
+                });
+                return;
+            } catch (error) {
+                console.warn('网络音频加载失败:', error);
+            }
+        }
+        
+        // 降级到语音合成
+        this.speakWithSynthesis(word);
+    }
+
+    speakWithSynthesis(word) {
         if (!this.speechSynthesis) {
             this.showNotification('您的浏览器不支持语音合成', 'error');
             return;
         }
         
-        // 停止当前语音
         this.speechSynthesis.cancel();
         
-        // 创建语音实例
         const utterance = new SpeechSynthesisUtterance(word);
-        
-        // 设置语音参数
         utterance.rate = 0.8;
         utterance.pitch = 1;
         utterance.volume = 1;
@@ -457,7 +651,6 @@ class WordLearnerApp {
             utterance.voice = englishVoice;
         }
         
-        // 播放语音
         this.speechSynthesis.speak(utterance);
         
         // 播放动画效果
@@ -471,36 +664,52 @@ class WordLearnerApp {
         const button = document.getElementById('addToNewWords');
         
         try {
-            if (button.innerHTML.includes('far')) {
-                // 加入生词本
-                await this.db.addToNewWords(wordData.id);
-                button.innerHTML = '<i class="fas fa-star"></i> 移出生词本';
-                this.showNotification('已加入生词本', 'success');
-            } else {
+            // 检查当前状态
+            const newWords = await this.db.getNewWords();
+            const isInNewWords = newWords.some(item => item.id === wordData.id);
+            
+            if (isInNewWords) {
                 // 移出生词本
                 await this.db.removeFromNewWords(wordData.id);
                 button.innerHTML = '<i class="far fa-star"></i> 加入生词本';
-                this.showNotification('已移出生词本', 'info');
+                button.classList.remove('in-new-words');
+                this.showNotification('已移出生词本', 'success');
+            } else {
+                // 加入生词本
+                await this.db.addToNewWords(wordData.id);
+                button.innerHTML = '<i class="fas fa-star"></i> 移出生词本';
+                button.classList.add('in-new-words');
+                this.showNotification('已加入生词本', 'success');
             }
+            
+            // 如果当前在生词本页面，刷新列表
+            if (this.currentPage === 'new-words') {
+                await this.loadNewWordsList();
+            }
+            
         } catch (error) {
             console.error('操作生词本失败:', error);
-            this.showNotification('操作失败', 'error');
+            this.showNotification('操作失败: ' + error.message, 'error');
         }
     }
 
-    updateNewWordButton(wordId) {
+    async updateNewWordButton(wordId) {
         const button = document.getElementById('addToNewWords');
         
-        // 检查是否已在生词本中
-        this.db.getNewWords().then(newWords => {
+        try {
+            const newWords = await this.db.getNewWords();
             const isInNewWords = newWords.some(item => item.id === wordId);
             
             if (isInNewWords) {
                 button.innerHTML = '<i class="fas fa-star"></i> 移出生词本';
+                button.classList.add('in-new-words');
             } else {
                 button.innerHTML = '<i class="far fa-star"></i> 加入生词本';
+                button.classList.remove('in-new-words');
             }
-        });
+        } catch (error) {
+            console.error('更新生词本按钮状态失败:', error);
+        }
     }
 
     toggleDetails() {
@@ -705,8 +914,7 @@ class WordLearnerApp {
             this.showNotification('保存单词失败: ' + error.message, 'error');
         }
     }
-    
-    // 添加重置上传界面的方法
+
     resetUploadInterface() {
         const uploadArea = document.getElementById('uploadArea');
         uploadArea.innerHTML = `
@@ -723,7 +931,7 @@ class WordLearnerApp {
             });
             
             const fileInput = document.getElementById('novelFile');
-            fileInput.value = ''; // 清空文件输入
+            fileInput.value = '';
         }, 100);
         
         document.getElementById('processingResult').style.display = 'none';
@@ -789,31 +997,57 @@ class WordLearnerApp {
 
     async loadNewWordsList() {
         try {
-            const newWords = await this.db.getNewWords();
             const newWordsList = document.getElementById('newWordsList');
             
-            if (newWords.length === 0) {
+            // 显示加载状态
+            newWordsList.innerHTML = '<div class="loading">加载中...</div>';
+            
+            const newWords = await this.db.getNewWords();
+            
+            if (!newWords || newWords.length === 0) {
                 newWordsList.innerHTML = '<p class="empty-state">生词本为空</p>';
                 return;
             }
             
             let html = '';
             
-            for (const word of newWords) {
+            // 对生词按添加时间排序（最近添加的在前）
+            const sortedWords = newWords.sort((a, b) => {
+                return new Date(b.addedAt) - new Date(a.addedAt);
+            });
+            
+            for (const word of sortedWords) {
+                if (!word || !word.word) {
+                    console.warn('发现无效的生词数据:', word);
+                    continue;
+                }
+                
                 const addedDate = new Date(word.addedAt);
-                const dateStr = addedDate.toLocaleDateString();
+                const dateStr = addedDate.toLocaleDateString('zh-CN', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
                 
                 html += `
-                    <div class="word-item">
+                    <div class="word-item" data-word-id="${word.id}">
                         <div class="word-content">
                             <div class="word-text">${word.word}</div>
                             <div class="word-phonetic">${word.phonetic || ''}</div>
-                            <div class="word-meaning">${word.meaning || ''}</div>
+                            <div class="word-meaning">${word.meaning || '暂无释义'}</div>
                             <div class="word-meta">
-                                <span class="added-date">添加于: ${dateStr}</span>
+                                <span class="added-date">
+                                    <i class="far fa-clock"></i> 添加于: ${dateStr}
+                                </span>
+                                <span class="difficulty-badge small" data-level="${word.difficulty || 3}">
+                                    ${this.getDifficultyText(word.difficulty || 3)}
+                                </span>
                             </div>
                         </div>
                         <div class="word-actions">
+                            <button class="icon-btn small" onclick="app.speakWord('${word.word}')">
+                                <i class="fas fa-volume-up"></i>
+                            </button>
                             <button class="icon-btn small" onclick="app.removeFromNewWords(${word.id})">
                                 <i class="fas fa-trash-alt"></i>
                             </button>
@@ -826,6 +1060,14 @@ class WordLearnerApp {
             
         } catch (error) {
             console.error('加载生词本失败:', error);
+            const newWordsList = document.getElementById('newWordsList');
+            newWordsList.innerHTML = `
+                <div class="error-state">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <p>加载生词本失败</p>
+                    <button class="retry-btn" onclick="app.retryLoadNewWords()">重试</button>
+                </div>
+            `;
         }
     }
 
@@ -916,7 +1158,7 @@ class WordLearnerApp {
             const completionRate = plan.dailyGoal > 0 ? 
                 Math.min((todayHistory.length / plan.dailyGoal) * 100, 100) : 0;
             
-            // 获取坚持天数（简化实现）
+            // 获取坚持天数
             const streak = localStorage.getItem('learningStreak') || '0';
             
             // 更新UI
@@ -950,6 +1192,10 @@ class WordLearnerApp {
             console.error('开始复习失败:', error);
             this.showNotification('开始复习失败', 'error');
         }
+    }
+
+    showStats() {
+        this.showNotification('统计功能开发中...', 'info');
     }
 
     // 工具方法
@@ -1001,7 +1247,7 @@ class WordLearnerApp {
     }
 
     playAnswerSound(correct) {
-        // 创建音频上下文（如果支持）
+        // 创建音频上下文
         if (window.AudioContext || window.webkitAudioContext) {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             const audioContext = new AudioContext();
@@ -1042,6 +1288,11 @@ class WordLearnerApp {
         } catch (error) {
             console.error('添加单词到学习失败:', error);
         }
+    }
+
+    // 添加重试加载生词本的方法
+    async retryLoadNewWords() {
+        await this.loadNewWordsList();
     }
 }
 
@@ -1113,6 +1364,73 @@ notificationStyle.textContent = `
         padding: 40px 20px;
         color: var(--gray-color);
     }
+    
+    .loading {
+        text-align: center;
+        padding: 40px;
+        color: var(--gray-color);
+    }
+    
+    .error-state {
+        text-align: center;
+        padding: 40px;
+        color: var(--danger-color);
+    }
+    
+    .error-state i {
+        font-size: 3rem;
+        margin-bottom: 20px;
+    }
+    
+    .retry-btn {
+        margin-top: 15px;
+        padding: 8px 20px;
+        background: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: 20px;
+        cursor: pointer;
+    }
+    
+    .dictionary-details {
+        margin-top: 15px;
+    }
+    
+    .meaning-item {
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .meaning-item:last-child {
+        border-bottom: none;
+    }
+    
+    .part-of-speech {
+        font-weight: 600;
+        color: var(--primary-color);
+        margin-bottom: 5px;
+    }
+    
+    .definition {
+        margin-bottom: 8px;
+    }
+    
+    .example {
+        font-style: italic;
+        color: var(--gray-color);
+        font-size: 0.9rem;
+    }
+    
+    .example em {
+        font-style: normal;
+        font-weight: 500;
+        color: var(--dark-color);
+    }
+    
+    .in-new-words {
+        color: var(--warning-color) !important;
+    }
 `;
 document.head.appendChild(notificationStyle);
 
@@ -1120,9 +1438,5 @@ document.head.appendChild(notificationStyle);
 let app;
 window.addEventListener('DOMContentLoaded', async () => {
     app = new WordLearnerApp();
-    
-    // 暴露到全局
     window.app = app;
-
 });
-
