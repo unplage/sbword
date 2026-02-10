@@ -84,11 +84,15 @@ class WordDatabase {
     }
 
     // 单词操作
+    // 在 db.js 中，修改 addWord 函数，添加调试信息
     async addWord(wordData) {
         await this.ready();
         return new Promise((resolve, reject) => {
             const transaction = this.db.transaction([STORES.WORDS], 'readwrite');
             const store = transaction.objectStore(STORES.WORDS);
+            
+            console.log('正在保存单词:', wordData.word);
+            
             const request = store.add({
                 ...wordData,
                 createdAt: new Date().toISOString(),
@@ -96,20 +100,31 @@ class WordDatabase {
                 reviewCount: 0
             });
             
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                console.log('单词保存成功:', wordData.word, 'ID:', request.result);
+                resolve(request.result);
+            };
+            request.onerror = (e) => {
+                console.error('单词保存失败:', wordData.word, '错误:', e.target.error);
+                reject(e.target.error);
+            };
         });
     }
-
+    
+    // 修改 getWord 函数，确保能正确找到单词
     async getWord(word) {
         await this.ready();
         return new Promise((resolve, reject) => {
             const transaction = this.db.transaction([STORES.WORDS], 'readonly');
             const store = transaction.objectStore(STORES.WORDS);
             const index = store.index('word');
-            const request = index.get(word);
             
-            request.onsuccess = () => resolve(request.result);
+            // 使用精确匹配
+            const request = index.get(word.toLowerCase());
+            
+            request.onsuccess = () => {
+                resolve(request.result);
+            };
             request.onerror = () => reject(request.error);
         });
     }
@@ -415,4 +430,5 @@ class WordDatabase {
 }
 
 // 导出单例实例
+
 const wordDB = new WordDatabase();
