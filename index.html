@@ -2347,9 +2347,7 @@
                         
                         request.onsuccess = () => {
                             const lists = request.result || [];
-                            lists.sort((a, b)
-
-                                        new Date(b.createdAt) - new Date(a.createdAt));
+                            lists.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
                             resolve(lists);
                         };
                         request.onerror = () => reject(request.error);
@@ -6001,3 +5999,4 @@
     </script>
 </body>
 </html>        
+
