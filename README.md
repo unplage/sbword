@@ -1,5 +1,3 @@
 # sbword
-背单词
-模拟扇贝单词；
-还在初版功能少；
-https://unplage.github.io/sbword/
+背单词；本程序不再更新；请使用/kmword/，功能相同；
+请使用https://unplage.github.io/kmword/
